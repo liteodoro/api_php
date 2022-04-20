@@ -27,12 +27,16 @@ try {
     if ($method != null) {
         $url = explode("/", $_SERVER["REQUEST_URI"]);
         array_shift($url);
-        array_shift($url);
-        //$result = authentic($method, $url);
+       // array_shift($url);
+
+        if (count($url) == 0){
+          throw new Exception();
+     }       
+      //$result = authentic($method, $url);
     } else {
         throw new Exception();
     };
-
+    
     if ($result == null) {
         $result = route($method, $url);
     }
