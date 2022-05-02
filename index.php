@@ -1,4 +1,5 @@
 <?php
+
 include_once "./config/config.php";
 include_once "./config/jwt.php";
 
@@ -11,46 +12,73 @@ require_once "./app/controller/usuarioController.php";
 try {
     //Variavel para os resultados
     $result = null;
+    $httpCod = null;
+    $auth = null;
 
-    //Cabeçalho comum da aplicação
-    header("Content-Type: application/json; charset=UTF-8");
-
-    //Validação de rotas
     $method = isset($_SERVER["REQUEST_METHOD"]) ? $_SERVER["REQUEST_METHOD"] : null;
 
-    // if(isset($_SERVER["REQUEST_METHOD"])){
-    //     $method = $_SERVER["REQUEST_METHOD"];
-    // }else{
-    //     $method = null;
-    // }
+    header("Access-Control-Allow-Origin: *");
+    header("Content-Type: application/json; charset=UTF-8");
 
-    if ($method != null) {
-        $url = explode("/", $_SERVER["REQUEST_URI"]);
-        array_shift($url);
-       // array_shift($url);
-
-        if (count($url) == 0){
-          throw new Exception();
-     }       
-      //$result = authentic($method, $url);
-    } else {
-        throw new Exception();
-    };
-    
-    if ($result == null) {
-        $result = route($method, $url);
+    if ($method == "OPTIONS") {
+        //Cabeçalho comum da aplicação    
+        header("Access-Control-Allow-Methods: POST, GET, PUT, OPTIONS");
+        header("Access-Control-Allow-Headers: *");
+        header("Access-Control-Max-Age: 3600"); //1hora == 3600 seg;
+        header("Access-Control-Allow-Credentials: true");
     }
 
-    //A resposta se não existir errose se existirem dados
-    http_response_code(200);
-    echo json_encode(array("result" => $result));
+    if ($method != null && $method != "OPTIONS") {
+
+        $authRouterFree = guardian($_SERVER["REQUEST_URI"]);
+
+        //Validação de rotas
+        $url = explode("/", $_SERVER["REQUEST_URI"]);
+        array_shift($url);
+        array_shift($url);
+
+        $auth = authentic($method, $url);
+        //$auth = "userAll";
+
+        //Verifica validação do usuario
+        if ($auth != null && $url[count($url) - 1] == "logon") {
+            $httpCod = 200;
+            $result = $auth;
+        } else if ($auth != null || $authRouterFree) {
+            $httpCod = 200;
+            $result = route($method, $url, $auth);
+        } else {
+            $httpCod = 401;
+            $result = "Usuario sem autorização";
+        }
+
+        //A resposta se não existir errose se existirem dados
+        //header('Content-Type: application/json;charset=utf-8');
+        http_response_code($httpCod);
+        echo json_encode(array("result" => $result));
+    } else {
+        //throw new Exception();
+    };
 } catch (Exception $e) {
     http_response_code(404);
     echo json_encode(array("result" => "Pagina não encontrada!"));
 }
 
 
-function route($method, $url)
+function guardian($urlPadrao)
+{
+    $urlPadrao = $_SERVER["REQUEST_URI"];
+    $routesFree = [
+        "/api/usuario/logon",
+        "/api/usuario/add",
+        "/api/produto/list"
+    ];
+    //verificar se a rota é uma daquelas do array. Se for retorna o numero. Ele retorna o numero do index do array senão retorna false FALSE;
+    return array_search($urlPadrao, $routesFree);
+}
+
+
+function route($method, $url, $auth)
 {
     $result = null;
     //Rotas Autenticadas
@@ -111,6 +139,14 @@ function route($method, $url)
                                     $result = $userController->update($user);
                                 } else {
                                     $result = $userController->add($user);
+                                }
+                                break;
+                            case "upload" && $auth:
+                                $userController = new usuarioController;
+                                $user = json_decode($auth);
+                                $nameFile = uploadfotos(MIDIAS_USER);
+                                if ($nameFile) {
+                                    $userController->updatePhoto($user->uid, $nameFile);
                                 }
                                 break;
                             default:
@@ -200,23 +236,52 @@ function authentic($method, $url)
                         $dadosUser = json_decode(file_get_contents('php://input')); //tranformar JSON do body em Objetos
                         $userController = new usuarioController;
                         $result = $userController->logon($dadosUser->usuario, $dadosUser->senha);
-                        $token = isset($result["token"]) ? $result["token"] : $token;
+                        $token = isset($result->token) ? $result->token : $token;
                         break;
                     default:
-                        throw new Exception();
+                        //throw new Exception();
+                        $result = null;
                         break;
                 }
                 break;
 
             default:
-                throw new Exception();
+                //throw new Exception();
+                $result = null;
                 break;
         }
     }
-    if ($token == null) throw new Exception();
     $auth = $token != null ? validJWT($token) : null;
-    if ($token == null || $auth == null) throw new Exception();
-    $_SESSION[$token] = json_decode($auth);
+
+    if ($token != null && $auth != null) {
+        $_SESSION[$token] = json_decode($auth);
+        $result = isset($result) ? $result : json_decode($auth);
+    }
 
     return $result;
+}
+
+
+function uploadfotos($local, $nameFiles = null)
+{
+    $files = $_FILES;
+    if ($files) {
+        $local = new DirectoryIterator("./") . $local;
+        if (!is_dir($local)) {
+            mkdir($local, 0755, true);
+        }
+
+        $nameFiles = isset($nameFiles) ? $nameFiles : md5($files['file']['name']);
+        $ext = explode('.', $files['file']['name']);
+
+        $newNameFile = $nameFiles . "." . $ext[count($ext) - 1];
+
+        $destino = $local . '/' .  $newNameFile;
+
+        $arquivo_tmp = $files['file']['tmp_name'];
+
+        move_uploaded_file($arquivo_tmp, $destino);
+
+        return $newNameFile;
+    }
 }
