@@ -1,11 +1,16 @@
 <?php
 
+use LDAP\Result;
+
 include_once "./config/config.php";
 include_once "./config/jwt.php";
 
+include_once "./app/router/router.php";
 require_once "./app/services/DAO.php";
 require_once "./app/models/usuario.php";
 require_once "./app/controller/usuarioController.php";
+require_once "./app/models/produto.php";
+require_once "./app/controller/produtoController.php";
 
 //phpinfo();
 
@@ -46,7 +51,7 @@ try {
             $result = $auth;
         } else if ($auth != null || $authRouterFree) {
             $httpCod = 200;
-            $result = route($method, $url, $auth);
+            $result = routes($method, $url, $auth);
         } else {
             $httpCod = 401;
             $result = "Usuario sem autorização";
@@ -60,8 +65,15 @@ try {
         //throw new Exception();
     };
 } catch (Exception $e) {
-    http_response_code(404);
-    echo json_encode(array("result" => "Pagina não encontrada!"));
+    $code = 404;
+    $erro = "Pagina não encontrada!";
+
+    if ($e->getMessage() != null) {
+        $code = $httpCod;
+        $erro = $e->getMessage();
+    }
+    http_response_code($code);
+    echo json_encode(array("result" => $erro));
 }
 
 
@@ -78,139 +90,13 @@ function guardian($urlPadrao)
 }
 
 
-function route($method, $url, $auth)
+function routes($method, $url, $auth)
 {
-    $result = null;
-    //Rotas Autenticadas
-    switch ($method) {
-
-            //Leituras
-        case "GET": {
-                switch ($url[0]) {
-                    case "usuario":
-                        switch ($url[1]) {
-                            case "get": {
-                                    if (!isset($url[2])) throw new Exception();
-                                    $userController = new usuarioController;
-                                    $result = $userController->get($url[2]);
-                                }
-                                break;
-
-                            case "list": {
-                                    $userController = new usuarioController;
-                                    $result = $userController->getAll();
-                                }
-                                break;
-
-                            case "listnot": {
-                                    $userController = new usuarioController;
-                                    $result = $userController->getAll(0);
-                                }
-                                break;
-
-                            default:
-                                throw new Exception();
-                                break;
-                        }
-                        break;
-
-                    case "produto":
-                        break;
-
-                    default:
-                        throw new Exception();
-                        break;
-                }
-            }
-            break;
-
-            //Cadastro
-        case "POST": {
-                switch ($url[0]) {
-                    case "usuario":
-                        switch ($url[1]) {
-                            case 'add':
-                            case 'update':
-                                $dadosUser = json_decode(file_get_contents('php://input')); //tranformar JSON do body em Objetos
-                                $userController = new usuarioController;
-                                $user = new Usuario;
-                                $user->popo($dadosUser);
-                                if ($user->id != null) { // Se tem id Update se não Add
-                                    $result = $userController->update($user);
-                                } else {
-                                    $result = $userController->add($user);
-                                }
-                                break;
-                            case "upload" && $auth:
-                                $userController = new usuarioController;
-                                $user = json_decode($auth);
-                                $nameFile = uploadfotos(MIDIAS_USER);
-                                if ($nameFile) {
-                                    $userController->updatePhoto($user->uid, $nameFile);
-                                }
-                                break;
-                            default:
-                                throw new Exception();
-                                break;
-                        }
-                        break;
-
-                    default:
-                        throw new Exception();
-                        break;
-                }
-            }
-            break;
-
-            //Alteração
-        case "PUT": {
-                switch ($url[0]) {
-                    case "usuario":
-                        switch ($url[1]) {
-                            case 'update':
-                                $dadosUser = json_decode(file_get_contents('php://input')); //tranformar JSON do body em Objetos
-                                $userController = new usuarioController;
-                                $user = new Usuario;
-                                $user->popo($dadosUser);
-                                $result = $userController->update($user);
-                                break;
-                            default:
-                                throw new Exception();
-                                break;
-                        }
-                        break;
-
-                    default:
-                        throw new Exception();
-                        break;
-                }
-            }
-            break;
-
-            //Delete
-        case "DELETE": {
-                switch ($url[0]) {
-                    case "usuario":
-                        switch ($url[1]) {
-                            case 'delete':
-                                if (!isset($url[2])) throw new Exception();
-                                $userController = new usuarioController;
-                                $result = $userController->delete($url[2]);
-                                break;
-                            default:
-                                throw new Exception();
-                                break;
-                        }
-                        break;
-
-                    default:
-                        throw new Exception();
-                        break;
-                }
-            }
-            break;
-    }
-    return $result;
+    $result = routeUser($method, $url, $auth);
+    if ($result) return $result;
+    $result = routeProduto($method, $url, $auth);
+    if ($result) return $result;
+    throw new Exception();
 }
 
 
@@ -239,14 +125,12 @@ function authentic($method, $url)
                         $token = isset($result->token) ? $result->token : $token;
                         break;
                     default:
-                        //throw new Exception();
                         $result = null;
                         break;
                 }
                 break;
 
             default:
-                //throw new Exception();
                 $result = null;
                 break;
         }
@@ -270,18 +154,25 @@ function uploadfotos($local, $nameFiles = null)
         if (!is_dir($local)) {
             mkdir($local, 0755, true);
         }
+        $resultName = null;
+        foreach ($files as $file) {
+            $timeStamp =  (new DateTime("now"))->getTimestamp(); //use o timestamp: é o tempo em segundos
+            //$nameFileMD5 = md5($files['file']['name'] . $files['file']['size'] . $files['file']['type']);
+            $nameFileMD5 = md5($file['name'] . $timeStamp);
 
-        $nameFiles = isset($nameFiles) ? $nameFiles : md5($files['file']['name']);
-        $ext = explode('.', $files['file']['name']);
+            $nameFiles = isset($nameFiles) ? $nameFiles : $nameFileMD5;
+            $ext = explode('.', $file['name']);
 
-        $newNameFile = $nameFiles . "." . $ext[count($ext) - 1];
+            $newNameFile = $nameFiles . "." . $ext[count($ext) - 1];
 
-        $destino = $local . '/' .  $newNameFile;
+            $destino = $local . '/' .  $newNameFile;
 
-        $arquivo_tmp = $files['file']['tmp_name'];
+            $arquivo_tmp = $file['tmp_name'];
 
-        move_uploaded_file($arquivo_tmp, $destino);
-
-        return $newNameFile;
+            if (move_uploaded_file($arquivo_tmp, $destino)) {
+                $resultName .= $newNameFile;
+            };
+        }
     }
+    return $resultName;
 }
